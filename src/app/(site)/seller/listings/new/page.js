@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
+import { getCurrentPosition } from '@/lib/geolocation';
 import Card from '@/components/ui/Card';
 import Input from '@/components/ui/Input';
 import Select from '@/components/ui/Select';
@@ -12,6 +13,7 @@ import Radio from '@/components/ui/Radio';
 import Button from '@/components/ui/Button';
 import Alert from '@/components/ui/Alert';
 import PageHeader from '@/components/ui/PageHeader';
+import { MapPinIcon } from '@/components/ui/Icons';
 
 const CURRENT_YEAR = new Date().getFullYear();
 
@@ -28,6 +30,11 @@ export default function PostEquipmentPage() {
     categoryId: '',
     condition: 'good',
     state: '',
+    district: '',
+    city: '',
+    area: '',
+    pincode: '',
+    fullAddress: '',
     listingType: 'fixed_price',
     fixedPrice: '',
     quantity: '1',
@@ -37,6 +44,18 @@ export default function PostEquipmentPage() {
     startTime: '',
     endTime: '',
   });
+
+  // GPS se mila hai to yahan {lat,lng} — backend isi se reverse-geocode
+  // karta hai aur baad me nearby-search ke liye use karta hai. Seller ke
+  // manual edits is `geo` ko invalidate nahi karte — sirf text fields change hoti hain.
+  const [geo, setGeo] = useState(null);
+  const [locating, setLocating] = useState(false);
+  const [locationSource, setLocationSource] = useState('manual'); // 'gps' | 'manual'
+  const [locateError, setLocateError] = useState('');
+  // Seller ne haath se jo location fields edit ki hain — agar "Use my
+  // current location" DOBARA click ho (ya pehle click ke baad kuch edit
+  // ho chuka ho), un fields ko re-detect overwrite NAHI karega.
+  const [touchedLocationFields, setTouchedLocationFields] = useState(() => new Set());
 
   const [specs, setSpecs] = useState({
     general: { brand: '', type: '', productionYear: '', hoursOnMeter: '', totalWeightKg: '' },
@@ -63,6 +82,48 @@ export default function PostEquipmentPage() {
 
   function updateForm(field, value) {
     setForm((prev) => ({ ...prev, [field]: value }));
+  }
+
+  /**
+   * "Use my current location" — browser GPS -> backend reverse-geocode ->
+   * form fields prefill. Seller apne aap se hamesha edit kar sakta hai —
+   * ye sirf ek starting point hai, final save nahi.
+   */
+  async function handleDetectLocation() {
+    setLocateError('');
+    setLocating(true);
+    try {
+      const position = await getCurrentPosition();
+      setGeo(position);
+      setLocationSource('gps');
+
+      const detected = await api.get(`/listings/geo/reverse?lat=${position.lat}&lng=${position.lng}`);
+      setForm((prev) => ({
+        ...prev,
+        state: touchedLocationFields.has('state') ? prev.state : detected.state || prev.state,
+        city: touchedLocationFields.has('city') ? prev.city : detected.city || prev.city,
+        district: touchedLocationFields.has('district') ? prev.district : detected.district || prev.district,
+        area: touchedLocationFields.has('area') ? prev.area : detected.area || prev.area,
+        pincode: touchedLocationFields.has('pincode') ? prev.pincode : detected.pincode || prev.pincode,
+      }));
+    } catch (err) {
+      if (err.code === 1) {
+        setLocateError('Location permission denied. Please enter your location manually below.');
+      } else {
+        setLocateError('Could not detect your location. Please enter it manually below.');
+      }
+    } finally {
+      setLocating(false);
+    }
+  }
+
+  // Seller ne koi bhi location field haath se badli to ab wo "manual" hai —
+  // GPS point (agar tha) DB me address-hint ke liye reh jaata hai, par
+  // display/label ab manual maana jaayega.
+  function updateLocationField(field, value) {
+    setLocationSource('manual');
+    setTouchedLocationFields((prev) => new Set(prev).add(field));
+    updateForm(field, value);
   }
 
   function updateSpec(group, field, value) {
@@ -101,7 +162,15 @@ export default function PostEquipmentPage() {
         description: form.description,
         categoryId: form.categoryId,
         condition: form.condition,
-        location: { state: form.state },
+        location: {
+          state: form.state || undefined,
+          city: form.city || undefined,
+          district: form.district || undefined,
+          area: form.area || undefined,
+          pincode: form.pincode || undefined,
+          fullAddress: form.fullAddress || undefined,
+          ...(geo ? { geo } : {}),
+        },
         listingType: form.listingType,
         specifications: buildSpecsPayload(),
       };
@@ -165,24 +234,91 @@ export default function PostEquipmentPage() {
               ))}
             </Select>
 
+            <Select
+              label="Condition"
+              value={form.condition}
+              onChange={(e) => updateForm('condition', e.target.value)}
+            >
+              <option value="excellent">Excellent</option>
+              <option value="good">Good</option>
+              <option value="fair">Fair</option>
+            </Select>
+          </div>
+        </Card>
+
+        <Card>
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <h2 className="text-sm font-semibold text-slate-900">Location</h2>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              loading={locating}
+              onClick={handleDetectLocation}
+            >
+              <MapPinIcon className="h-4 w-4" />
+              Use my current location
+            </Button>
+          </div>
+
+          {locateError && (
+            <p className="mb-3 text-xs text-amber-600">{locateError}</p>
+          )}
+          {locationSource === 'gps' && !locateError && (
+            <p className="mb-3 text-xs text-emerald-600">
+              Detected from your device — review and edit if anything looks wrong.
+            </p>
+          )}
+
+          <div className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
-              <Select
-                label="Condition"
-                value={form.condition}
-                onChange={(e) => updateForm('condition', e.target.value)}
-              >
-                <option value="excellent">Excellent</option>
-                <option value="good">Good</option>
-                <option value="fair">Fair</option>
-              </Select>
               <Input
                 label="State"
                 value={form.state}
-                onChange={(e) => updateForm('state', e.target.value)}
-                placeholder="e.g. Assam"
+                onChange={(e) => updateLocationField('state', e.target.value)}
+                placeholder="e.g. Haryana"
                 required
               />
+              <Input
+                label="District"
+                value={form.district}
+                onChange={(e) => updateLocationField('district', e.target.value)}
+                placeholder="e.g. Jind"
+              />
             </div>
+            <div className="grid grid-cols-2 gap-4">
+              <Input
+                label="City"
+                value={form.city}
+                onChange={(e) => updateLocationField('city', e.target.value)}
+                placeholder="e.g. Jind"
+              />
+              <Input
+                label="Area / Locality"
+                value={form.area}
+                onChange={(e) => updateLocationField('area', e.target.value)}
+                placeholder="e.g. Railway Colony"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <Input
+                label="Pincode"
+                value={form.pincode}
+                onChange={(e) => updateLocationField('pincode', e.target.value)}
+                placeholder="e.g. 126102"
+              />
+            </div>
+            <Textarea
+              label="Full Address"
+              value={form.fullAddress}
+              onChange={(e) => updateLocationField('fullAddress', e.target.value)}
+              rows={2}
+              placeholder="Full address where the machine is located"
+            />
+            <p className="text-xs text-slate-500">
+              Your exact address is only used to calculate distance for nearby buyers — it is
+              never shown publicly. Buyers only see your city/area/state.
+            </p>
           </div>
         </Card>
 

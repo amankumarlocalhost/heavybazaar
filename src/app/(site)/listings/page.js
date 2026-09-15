@@ -4,6 +4,14 @@ import { useEffect, useMemo, useState, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { sortForFilter } from '@/lib/listings';
+import {
+  hasGeolocationSupport,
+  wasPermissionDeniedThisSession,
+  getCurrentPosition,
+  getSavedBuyerLocation,
+  saveBuyerLocation,
+  clearSavedBuyerLocation,
+} from '@/lib/geolocation';
 import Button from '@/components/ui/Button';
 import Select from '@/components/ui/Select';
 import Input from '@/components/ui/Input';
@@ -13,7 +21,7 @@ import Pagination from '@/components/ui/Pagination';
 import Modal from '@/components/ui/Modal';
 import ListingCard from '@/components/listings/ListingCard';
 import { ListingGridSkeleton } from '@/components/ui/Skeleton';
-import { SearchIcon, FilterIcon } from '@/components/ui/Icons';
+import { SearchIcon, FilterIcon, MapPinIcon } from '@/components/ui/Icons';
 
 const PAGE_SIZE = 12;
 
@@ -56,6 +64,11 @@ const SORTS = [
   { value: 'price_desc', label: 'Price: high to low' },
 ];
 
+// Sirf tab dikhta hai jab buyer ki location maloom hai (GPS-detect) —
+// backend pehle se hi nearest-first bhejta hai, ye value bas useMemo ko
+// batata hai ki us order ko chheda na jaaye.
+const NEAREST_SORT = { value: 'nearest', label: 'Nearest first' };
+
 function BrowseContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -81,6 +94,108 @@ function BrowseContent() {
   const [maxPrice, setMaxPrice] = useState('');
   const [sort, setSort] = useState('newest');
 
+  // ---- Buyer location (auto-detect + manual override) ----
+  // `locationMode` 'gps' | 'manual' | null. null = no location set, browse
+  // behaves exactly as before (no server-side geo sort/filter).
+  const [locationMode, setLocationMode] = useState(null);
+  const [buyerGeo, setBuyerGeo] = useState(null); // {lat,lng} — sirf browser me rehta hai, kabhi save nahi hota DB me
+  const [locationLabel, setLocationLabel] = useState('');
+  const [locating, setLocating] = useState(false);
+  const [locateDenied, setLocateDenied] = useState(false);
+  const [manualLocationOpen, setManualLocationOpen] = useState(false);
+  const [manualState, setManualState] = useState('');
+  const [manualCity, setManualCity] = useState('');
+  // hasGeolocationSupport() checks `typeof window` — calling it directly
+  // during render gives the server (no window) and client (has window)
+  // different output for the same markup, which is a hydration mismatch.
+  // Starting false (matches SSR) and flipping it in an effect keeps first
+  // paint identical on both sides; the button just appears a tick after
+  // mount on browsers that support it.
+  const [geoSupported, setGeoSupported] = useState(false);
+
+  async function detectLocation() {
+    setLocating(true);
+    setLocateDenied(false);
+    try {
+      const pos = await getCurrentPosition();
+      setBuyerGeo(pos);
+      setLocationMode('gps');
+      // Buyer ne khud koi sort nahi chuna tha — location detect hote hi
+      // default "nearest first" ban jaata hai (auto-prioritize, koi filter
+      // apply karne ki zaroorat nahi).
+      setSort((prev) => (prev === 'newest' ? 'nearest' : prev));
+      try {
+        const addr = await api.get(`/listings/geo/reverse?lat=${pos.lat}&lng=${pos.lng}`);
+        const label = [addr.city, addr.state].filter(Boolean).join(', ');
+        setLocationLabel(label);
+        saveBuyerLocation({ mode: 'gps', lat: pos.lat, lng: pos.lng, label });
+      } catch {
+        saveBuyerLocation({ mode: 'gps', lat: pos.lat, lng: pos.lng });
+      }
+    } catch (err) {
+      // PERMISSION_DENIED === 1 — website normal kaam karta rahega,
+      // dobara auto-prompt nahi hoga (getCurrentPosition khud yaad rakhta hai)
+      if (err.code === 1) setLocateDenied(true);
+    } finally {
+      setLocating(false);
+    }
+  }
+
+  function applyManualLocation() {
+    const label = [manualCity, manualState].filter(Boolean).join(', ');
+    setLocationMode(manualState || manualCity ? 'manual' : null);
+    setBuyerGeo(null); // manual selection GPS ko override karta hai
+    setLocationLabel(label);
+    if (manualState || manualCity) {
+      saveBuyerLocation({ mode: 'manual', state: manualState, city: manualCity, label });
+    } else {
+      clearSavedBuyerLocation();
+    }
+    setManualLocationOpen(false);
+  }
+
+  function clearLocation() {
+    setLocationMode(null);
+    setBuyerGeo(null);
+    setLocationLabel('');
+    setManualState('');
+    setManualCity('');
+    clearSavedBuyerLocation();
+  }
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time client-only capability check, not a sync loop
+    setGeoSupported(hasGeolocationSupport());
+
+    // Pehle dekho browser me pehle se koi buyer location saved hai (is
+    // visitor ne pehle detect/select ki thi) — agar hai to dobara GPS
+    // prompt na karo, wahi use karo.
+    const saved = getSavedBuyerLocation();
+    if (saved?.mode === 'gps' && saved.lat != null) {
+      // Restoring what THIS browser already chose on a previous visit —
+      // one-time hydration from localStorage, not a reactive sync loop.
+      setBuyerGeo({ lat: saved.lat, lng: saved.lng });
+      setLocationMode('gps');
+      setLocationLabel(saved.label || '');
+      setSort((prev) => (prev === 'newest' ? 'nearest' : prev));
+      return;
+    }
+    if (saved?.mode === 'manual' && (saved.state || saved.city)) {
+      setManualState(saved.state || '');
+      setManualCity(saved.city || '');
+      setLocationMode('manual');
+      setLocationLabel(saved.label || '');
+      return;
+    }
+
+    // Kuch saved nahi hai — ek baar silently GPS try karo (buyer ko koi
+    // button dabana nahi pada). Deny ho ya unsupported ho to bas normal
+    // browse dikhega, koi break nahi hota.
+    if (hasGeolocationSupport() && !wasPermissionDeniedThisSession()) {
+      detectLocation();
+    }
+  }, []);
+
   useEffect(() => {
     api.get('/categories').then(setCategories).catch(() => {});
   }, []);
@@ -94,6 +209,17 @@ function BrowseContent() {
         if (categoryId) params.set('categoryId', categoryId);
         if (search) params.set('search', search);
 
+        // Buyer location diya hai to backend $geoNear se nearest-first
+        // sorted results dega — koi extra filter apply karne ki zaroorat
+        // nahi (doc ka core requirement).
+        if (locationMode === 'gps' && buyerGeo) {
+          params.set('lat', String(buyerGeo.lat));
+          params.set('lng', String(buyerGeo.lng));
+        } else if (locationMode === 'manual') {
+          if (manualState) params.set('state', manualState);
+          if (manualCity) params.set('city', manualCity);
+        }
+
         const result = await api.get(`/listings/browse?${params.toString()}`);
         setListings(result.items);
       } catch {
@@ -103,7 +229,7 @@ function BrowseContent() {
       }
     }
     loadListings();
-  }, [categoryId, search]);
+  }, [categoryId, search, locationMode, buyerGeo, manualState, manualCity]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- reset pagination when filters change
@@ -145,6 +271,10 @@ function BrowseContent() {
       const max = Number(maxPrice) * 100;
       items = items.filter((l) => l.listingType !== 'fixed_price' || (l.fixedPricePaise ?? 0) <= max);
     }
+
+    // 'nearest' ka matlab hai: backend ne already distance se sort karke
+    // bheja hai ($geoNear) — is order ko yahan dobara mat chhedo.
+    if (sort === 'nearest') return items;
 
     // Sort dropdown chhua nahi gaya to shelf ka apna ranking lagta hai
     // (wahi function jo homepage use karta hai).
@@ -274,7 +404,7 @@ function BrowseContent() {
   );
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6">
+    <div className="mx-auto min-h-[80vh] max-w-7xl px-4 py-8 sm:px-6">
       <div className="mb-6">
         <h1 className="text-2xl font-bold tracking-tight text-slate-900">
           {shelfCopy?.title || 'Equipment Marketplace'}
@@ -297,6 +427,41 @@ function BrowseContent() {
         </div>
         <Button type="submit">Search</Button>
       </form>
+
+      {/* Buyer location — auto-detected via GPS, or manually chosen. Purely
+          additive: when no location is set, browsing works exactly as before. */}
+      <div className="mb-6 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border border-slate-200 bg-surface px-4 py-2.5 text-sm">
+        <MapPinIcon className="h-4 w-4 shrink-0 text-brand-600" />
+        {locating ? (
+          <span className="text-slate-500">Detecting your location…</span>
+        ) : locationMode ? (
+          <>
+            <span className="text-slate-700">
+              Showing results near <strong className="font-semibold">{locationLabel || 'your area'}</strong>
+            </span>
+            <button type="button" onClick={() => setManualLocationOpen(true)} className="font-medium text-brand-600 hover:underline">
+              Change location
+            </button>
+            <button type="button" onClick={clearLocation} className="text-slate-400 hover:underline">
+              Clear
+            </button>
+          </>
+        ) : (
+          <>
+            <span className="text-slate-500">
+              {locateDenied ? 'Location unavailable.' : 'Location not set.'} Select manually to see nearby equipment first.
+            </span>
+            {geoSupported && !locateDenied && (
+              <button type="button" onClick={detectLocation} className="font-medium text-brand-600 hover:underline">
+                Use my current location
+              </button>
+            )}
+            <button type="button" onClick={() => setManualLocationOpen(true)} className="font-medium text-brand-600 hover:underline">
+              Select location
+            </button>
+          </>
+        )}
+      </div>
 
       <div className="grid grid-cols-1 gap-8 lg:grid-cols-[260px_1fr]">
         {/* Desktop filter sidebar */}
@@ -324,7 +489,7 @@ function BrowseContent() {
                 Filters
               </Button>
               <Select value={sort} onChange={(e) => setSort(e.target.value)} className="!py-2 text-xs sm:text-sm">
-                {SORTS.map((opt) => (
+                {(locationMode === 'gps' ? [NEAREST_SORT, ...SORTS] : SORTS).map((opt) => (
                   <option key={opt.value} value={opt.value}>
                     {opt.label}
                   </option>
@@ -372,6 +537,35 @@ function BrowseContent() {
         }
       >
         {filterForm}
+      </Modal>
+
+      <Modal
+        open={manualLocationOpen}
+        onClose={() => setManualLocationOpen(false)}
+        title="Select your location"
+        footer={
+          <Button className="w-full" onClick={applyManualLocation}>
+            Apply
+          </Button>
+        }
+      >
+        <div className="space-y-4">
+          <Input
+            label="State"
+            value={manualState}
+            onChange={(e) => setManualState(e.target.value)}
+            placeholder="e.g. Haryana"
+          />
+          <Input
+            label="City"
+            value={manualCity}
+            onChange={(e) => setManualCity(e.target.value)}
+            placeholder="e.g. Jind"
+          />
+          <p className="text-xs text-slate-500">
+            This overrides your detected GPS location and updates results to this area.
+          </p>
+        </div>
       </Modal>
     </div>
   );

@@ -62,7 +62,7 @@ export default function CategoryTiles({ categories = [] }) {
             <Link
               key={cat._id}
               href={`/listings?categoryId=${cat._id}`}
-              className="group flex items-center gap-3 rounded-xl border border-slate-200 bg-surface px-3 py-2.5 shadow-sm transition-all hover:-translate-y-0.5 hover:border-brand-300 hover:shadow-md"
+              className="group flex items-center gap-3 rounded-xl border border-slate-200 bg-surface px-3 py-2.5 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:border-brand-300 hover:shadow-md"
             >
               <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center">
                 {hasIcon ? (
@@ -88,7 +88,7 @@ export default function CategoryTiles({ categories = [] }) {
         {/* Aakhri tile — poori list pe le jaata hai, grid ka rhythm todta nahi */}
         <Link
           href="/listings"
-          className="group flex items-center gap-3 rounded-xl border border-dashed border-slate-300 bg-surface-muted px-3 py-2.5 transition-all hover:-translate-y-0.5 hover:border-brand-300 hover:shadow-md"
+          className="group flex items-center gap-3 rounded-xl border border-dashed border-slate-300 bg-surface-muted px-3 py-2.5 transition duration-200 hover:-translate-y-0.5 hover:border-brand-300 hover:shadow-md"
         >
           <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-400 group-hover:text-brand-600">
             <LayersIcon className="h-5 w-5" />

@@ -34,7 +34,7 @@ export default function SellerLayout({ children }) {
   }
 
   return (
-    <div className="mx-auto max-w-6xl px-4 py-8 sm:px-6">
+    <div className="mx-auto min-h-[80vh] max-w-6xl px-4 py-8 sm:px-6">
       <div className="grid grid-cols-1 gap-8 md:grid-cols-[220px_1fr]">
         <aside>
           <nav className="space-y-1 md:sticky md:top-24">

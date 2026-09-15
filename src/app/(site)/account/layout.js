@@ -31,7 +31,7 @@ export default function AccountLayout({ children }) {
   if (loading || !user) return <Spinner className="min-h-[70vh]" />;
 
   return (
-    <div className="mx-auto max-w-5xl px-4 py-8 sm:px-6">
+    <div className="mx-auto min-h-[80vh] max-w-5xl px-4 py-8 sm:px-6">
       <h1 className="mb-5 text-2xl font-bold tracking-tight text-slate-900">My Account</h1>
 
       <TabLinks items={TABS} activeHref={pathname} className="mb-8" />

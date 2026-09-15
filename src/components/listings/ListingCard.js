@@ -53,7 +53,7 @@ export default function ListingCard({
   return (
     <Link
       href={`/listings/${listing.slug || listing._id}`}
-      className="group flex h-full flex-col overflow-hidden rounded-2xl border border-slate-200 bg-surface shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-brand-200 hover:shadow-md"
+      className="group flex h-full flex-col overflow-hidden rounded-2xl border border-slate-200 bg-surface shadow-sm transition duration-200 hover:-translate-y-0.5 hover:border-brand-200 hover:shadow-md"
     >
       <div className="relative aspect-[4/3] overflow-hidden bg-slate-100">
         {coverImage ? (
@@ -112,7 +112,12 @@ export default function ListingCard({
         {listing.location?.state && (
           <p className="mt-1.5 flex items-center gap-1 text-xs text-slate-500">
             <MapPinIcon className="h-3.5 w-3.5 text-slate-400" />
-            {listing.location.state}
+            {[listing.location.city, listing.location.state].filter(Boolean).join(', ')}
+            {typeof listing.distanceKm === 'number' && (
+              <span className="ml-1 font-medium text-brand-700">
+                · {listing.distanceKm < 1 ? '<1 km' : `${listing.distanceKm.toFixed(0)} km`} away
+              </span>
+            )}
           </p>
         )}
 
